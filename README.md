@@ -1,3 +1,7 @@
+This is a modified version of the vSPD code, developed for the Electricity Authority 
+by David Weaver of Concept Consulting Group in order to implement SPD-based 
+beneficiaries-pay charging approaches.
+
 vSPD
 ====
 
