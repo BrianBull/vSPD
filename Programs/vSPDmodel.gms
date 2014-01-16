@@ -189,6 +189,9 @@ Parameters
   i_type1MixedConstraintHVDClineFixedLossWeight(t1MixCstr,br)       'Type 1 mixed constraint HVDC branch fixed losses weight'
   i_type1MixedConstraintPurWeight(t1MixCstr,i_bid)                  'Type 1 mixed constraint demand bid weights'
   i_tradePeriodReserveClassGenerationMaximum(tp,o,i_reserveClass)   'MW used to determine factor to adjust maximum reserve of a reserve class'
+
+* DW different deficit values for different nodes
+  i_nodeDeficit_var(n)
   ;
 
 * End of GDX declarations
@@ -310,6 +313,7 @@ Sets
   ;
 
 Parameters
+  tradePeriodBusDeficit_var(tp,b)                                   'The variable price for VoLL at each BUS, since deficits are calculated at busses'
 * Offers
   RampRateUp(tp,o)                                                  'The ramping up rate in MW per minute associated with the generation offer (MW/min)'
   RampRateDown(tp,o)                                                'The ramping down rate in MW per minute associated with the generation offer (MW/min)'
@@ -643,7 +647,9 @@ NETBENEFIT =e=
 * RDN - Bug fix - used surplusBranchGroupConstraintPenalty rather than surplusBranchFlowPenalty
 TotalViolationCostDefinition..
 TOTALPENALTYCOST =e=
-  sum[ Bus,    deficitBusGenerationPenalty * DEFICITBUSGENERATION(Bus) ]
+* DW, this is now bus specific
+  sum(Bus, tradePeriodBusDeficit_var(Bus) * DEFICITBUSGENERATION(Bus))
+*  sum[ Bus,    deficitBusGenerationPenalty * DEFICITBUSGENERATION(Bus) ]
 + sum[ Bus,    surplusBusGenerationPenalty * SURPLUSBUSGENERATION(Bus) ]
 + sum[ Branch, surplusBranchFlowPenalty    * SURPLUSBRANCHFLOW(Branch) ]
 + sum[ Offer,  deficitRampRatePenalty      * DEFICITRAMPRATE(Offer) ]

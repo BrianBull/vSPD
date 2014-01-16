@@ -146,7 +146,9 @@ Sets
 Alias (i_dayNum,day), (i_monthNum,mth), (i_yearNum,yr) ;
 
 * 'startyear' must be modified if you ever decide it is clever to change the first element of i_yearnum.
-Scalar startYear 'Start year - used in computing Gregorian date for override years'  / 1899 / ;
+Scalar startYear 'Start year - used in computing Gregorian date for override years'  / 1899 /
+         includeIRBenefits 'whether to include IR benefits in the node benefit calculation' /0/
+         useNodeDeficit_var 'whether to read in Node Deficit values from the GDX' /0/ ;
 
 Sets
 * Dispatch results reporting
@@ -166,6 +168,10 @@ Sets
   ;
 
 Parameters
+*A few parameters to track the end of period generation
+  o_EoPgen(n)                                         'The Ouput MW generation at the end of each period'
+  i_EoPgen(n)                                         'The Input MW generation for the start of the new period. o_EoPgen(n-1) = i_EoPgen(n)'
+
 * Main iteration counter
   iterationCount                                      'Iteration counter for the solve'
 * MIP logic
@@ -232,6 +238,12 @@ Parameters
   o_SIRprice_TP(dt,ild)                               'Output $/MW price for SIR reserve classes for each trade period'
   o_FIRviolation_TP(dt,ild)                           'Violation MW for FIR reserve classes for each trade period'
   o_SIRviolation_TP(dt,ild)                           'Violation MW for SIR reserve classes for each trade period'
+
+*Some extra reporting parameters for calculating IR nodal benefits
+  o_nodeIR_TP(dt,n,i_reserveClass)                    'Output MW of reserve provided at a node for each reserve class'
+  o_IRPrice_TP(dt,ild,i_reserveClass)                 'Output IR $/MW price for each island and reserve class'
+  o_nodeRevenueIR_TP(dt,n)                            'Output $ revenue from IR at each node for the different time periods'
+
   o_nodeGeneration_TP(dt,n)                           'Ouput MW generation at each node for the different time periods'
   o_nodeLoad_TP(dt,n)                                 'Ouput MW load at each node for the different time periods'
   o_nodePrice_TP(dt,n)                                'Output $/MW price at each node for the different time periods'
@@ -386,6 +398,7 @@ $load i_tradePeriodMnodeConstraintRHS i_type1MixedConstraintVarWeight i_type1Mix
 $load i_type1MixedConstraintHVDClineWeight i_tradePeriodType1MixedConstraintRHSParameters i_type2MixedConstraintLHSParameters i_tradePeriodType2MixedConstraintRHSParameters
 $load i_tradePeriodGenericEnergyOfferConstraintFactors i_tradePeriodGenericReserveOfferConstraintFactors i_tradePeriodGenericEnergyBidConstraintFactors
 $load i_tradePeriodGenericILReserveBidConstraintFactors i_tradePeriodGenericBranchConstraintFactors i_tradePeriodGenericConstraintRHS
+
 $gdxin
 
 
@@ -450,6 +463,16 @@ if(inputGDXGDate >= HVDCroundPowerGDXGDate,
 else
     i_tradePeriodAllowHVDCroundpower(tp) = 0 ;
 ) ;
+
+*DW - load a variable VoLL parameter for each input. This will normally be blank, and if so is not used.
+* However, it still needs to be in the input GDX or this will produce an error.
+* Perhaps set to ignore the error somehow, so original GDX files can be used. I don't know how to do this
+if (useNodeDeficit_var = 1,
+    execute_load i_nodeDeficit_var;
+else
+    i_nodeDeficit_var(n) = 0;
+) ;
+
 
 * Conditional load of additional mixed constraint parameters
 if(inputGDXGDate >= addnMixedConstraintVarGDXGDate,
@@ -725,6 +748,25 @@ deficitReservePenalty_CE(i_reserveClass) $ (ord(i_reserveClass) = 2)  = sum(i_CV
 deficitReservePenalty_ECE(i_reserveClass)$ (ord(i_reserveClass) = 1)  = sum(i_CVP$(ord(i_CVP) = 19), i_CVPvalues(i_CVP)) ;
 deficitReservePenalty_ECE(i_reserveClass)$ (ord(i_reserveClass) = 2)  = sum(i_CVP$(ord(i_CVP) = 20), i_CVPvalues(i_CVP)) ;
 
+*DW - TPM ================================================================================================================================================
+Parameters
+o_nodeGenIRCost_TP(dt,n)                                            'Generator Cost of providing reserve ($)'
+o_nodeGenCost_TP(dt,n)                                              'Generator supply cost - ($)'
+o_nodeLoadCost_TP(dt,n)                                             'Node Cost ($)'
+o_nodeBenefit_TP(dt,n)                                              'Generator benefit ($) = Generator revenue - Generator supply cost'
+o_nodeDispatchedBid_TP(dt,n)                                        'Total Amount of load not dispatched due to bid'
+
+o_offerGenCost_TP(dt,o)                                            'Generator supply cost - ($)'
+o_offerBenefit_TP(dt,o)                                            'Generator benefit ($) = Generator revenue - Generator supply cost'
+;
+
+*---------Pricing of deficit at Voll--------------------------------------------
+Scalar Voll                     /3000/;
+deficitBusGenerationPenalty                                              = Voll;
+surplusBusGenerationPenalty                                              = Voll;
+
+*TPM ================================================================================================================================================
+
 * Initialise some reporting parameters
 o_numTradePeriods = 0 ;
 o_systemOFV = 0 ;
@@ -791,6 +833,11 @@ for[iterationCount = 1 to numTradePeriods,
 
 *       Model Variables
 *       Reset bounds
+* DW - Variable VoLL
+        option clear = tradePeriodBusDeficit_var;
+* DW - End of Period Generation carry overs
+        option clear = o_EoPgen;
+        option clear = i_EoPgen;
 *       Offers
         option clear = GENERATION ;
         option clear = GENERATIONBLOCK ;
@@ -1058,6 +1105,11 @@ for[iterationCount = 1 to numTradePeriods,
 
 
 *       b) Initialise current trade period and model data for the current trade period
+* DW - load the end of period generation levels from the previous period
+        if (%VSPDRunNum% + iterationCount > 2.00,
+          execute_load "%OutputPath%%runName%\EoP_gen.gdx" i_EoPgen = o_EoPgen;
+          display "loaded previous period";
+          );
 *       Set the currTP start
 *       For sequential solve
         currTP(tp) $ { sequentialSolve and (ord(tp) eq iterationCount) } = yes $ i_studyTradePeriod(tp) ;
@@ -1146,11 +1198,29 @@ for[iterationCount = 1 to numTradePeriods,
 *       Set the primary-secondary offer combinations
         primarySecondaryOffer(offer,o1) = i_tradePeriodPrimarySecondaryOffer(offer,o1) ;
 
+* DW    Set the node specific VoLL values
+        tradePeriodBusDeficit_var(currTP,b) = VoLL;
+*The way this is set up, if there are no entries in the GDX for i_nodeDeficit_var (i.e. they are all zero)
+* then the original VoLL is used.
+*However, if there is at least one non zero entry, then there must be values for all nodes
+* or those that have no entry will have a VoLL value of zero.
+        if((smax(n,i_nodeDeficit_var(n))>0),
+          loop(i_tradePeriodNodeBus(currTP,n,b),
+            tradePeriodBusDeficit_var(currTP,b) = i_nodeDeficit_var(n) ;
+          );
+        );
 
 *       Initialise offer parameters for the current trade period start
-        generationStart(offer)          = sum[ i_offerParam $ ( ord(i_offerParam) = 1 )
-                                             , i_tradePeriodOfferParameter(offer,i_offerParam) ] ;
 
+* DW - generationStart changes
+        if((%VSPDRunNum% + iterationCount = 2.00),
+          generationStart(offer)          = sum[ i_offerParam $ ( ord(i_offerParam) = 1 )
+                                             , i_tradePeriodOfferParameter(offer,i_offerParam) ] ;
+        else
+          loop(i_tradePeriodOfferNode(currTP,o,n),
+            generationStart(currTP,o) = i_EoPgen(n) ;
+          );
+        );
         rampRateUp(offer)               = sum[ i_offerParam $ ( ord(i_offerParam) = 2 )
                                              , i_tradePeriodOfferParameter(offer,i_offerParam) ] ;
 
@@ -1186,7 +1256,7 @@ for[iterationCount = 1 to numTradePeriods,
         PLSRReserveType(i_reserveType) $ (ord(i_reserveType) = 1) = yes ;
 
         TWDRReserveType(i_reserveType) $ (ord(i_reserveType) = 2) = yes ;
-        
+
         ILReserveType(i_reserveType)   $ (ord(i_reserveType) = 3) = yes ;
 
         reserveOfferProportion(offer,trdBlk,i_reserveClass) $ ( ord(i_reserveClass) = 1 )
@@ -3021,6 +3091,7 @@ $label SkipLPResultChecking
             if( (FTRflag = 1),
 *               Store reslts for FTR reporting at a trade period level
                 loop(i_DateTimeTradePeriodMap(dt,currTP),
+
                     o_dateTime(dt) = yes;
 
                     o_Bus(dt,b) $ { Bus(currTP,b) and
@@ -3129,6 +3200,9 @@ $label Next
 *               Check if reporting at trading period level purposes is required...
                 if((tradePeriodReports = 1),
                     loop(i_dateTimeTradePeriodMap(dt,currTP),
+
+                        o_EoPgen(n) $ node(currTP,n) = sum(o $ (offerNode(currTP,o,n)), GENERATION.l(currTP,o));
+
                         o_dateTime(dt) = yes ;
 
 *                       Bus level output
@@ -3163,9 +3237,26 @@ $label Next
                                                                                             * busPrice(currTP,b)
                                                                    ] ;
 
-                        o_nodeRevenue_TP(dt,n) $ Node(currTP,n) = (i_tradingPeriodLength / 60)
+* DW - extra outputs for the IR calculations
+                       o_nodeIR_TP(dt,n,i_reserveClass) $ node(currTP,n) =
+                                 sum((o,i_reserveType) $ (offerNode(currTP,o,n)),
+                                 RESERVE.l(currTP,o,i_reserveClass,i_reserveType)
+                       );
+
+                       o_IRPrice_TP(dt,ild,i_reserveClass) = supplyDemandReserveRequirement.m(currTP,ild,i_reserveClass);
+
+                       o_nodeRevenueIR_TP(dt,n) $ Node(currTP,n) = (i_tradingPeriodLength/60)*
+                           [sum(i_reserveClass,
+                               [o_nodeIR_TP(dt,n,i_reserveClass) *
+                               sum((b,ild) $ (i_tradePeriodNodeBus(currTP,n,b) and i_tradePeriodBusIsland(currTP,b,ild)),
+                                   o_IRPrice_TP(dt,ild,i_reserveClass))
+                               ]
+                           )];
+
+                       o_nodeRevenue_TP(dt,n) $ Node(currTP,n) = (i_tradingPeriodLength / 60)
                                                                 * o_nodeGeneration_TP(dt,n)
                                                                 * o_nodePrice_TP(dt,n) ;
+
 
                         o_nodeCost_TP(dt,n) $ Node(currTP,n) = (i_tradingPeriodLength / 60)
                                                              * o_nodeLoad_TP(dt,n)
@@ -3183,6 +3274,77 @@ $label Next
                         o_nodeSurplus_TP(dt,n) $ Node(currTP,n) = sum[ b $ NodeBus(currTP,n,b), busNodeAllocationFactor(dt,b,n)
                                                                                               * SURPLUSBUSGENERATION.l(currTP,b)
                                                                      ] ;
+*DW - Calculate benefit by node depending on generator, load or negative load node ========================================================================================================================================================================================================================================================================================================================================================
+                        o_nodeGenIRCost_TP(dt,n) $ (node(currTP,n)) =
+                            (i_TradingPeriodLength/60)*
+                            sum[(o,trdBlk,i_reserveClass,i_reserveType) $ (offerNode(currTP,o,n) and validReserveOfferBlock(currTP,o,trdBlk,i_reserveClass,i_reserveType)),
+                                RESERVEBLOCK.l(currTP,o,trdBlk,i_reserveClass,i_reserveType) * reserveOfferPrice(currTP,o,trdBlk,i_reserveClass,i_reserveType)
+                            ];
+
+                        o_nodeGenCost_TP(dt,n) $ (node(currTP,n) and (o_nodeGeneration_TP(dt,n) > 0)) =
+                            (i_tradingPeriodLength/60)*
+                            sum((o,trdBlk) $ [offerNode(currTP,o,n) and validGenerationOfferBlock(currTP,o,trdBlk)],
+                                GENERATIONBLOCK.l(currTP,o,trdBlk) * GenerationOfferPrice(currTP,o,trdBlk)
+                            );
+
+                        o_nodeBenefit_TP(dt,n) $ (node(currTP,n) and (o_nodeGeneration_TP(dt,n) > 0)) =
+                            o_nodeRevenue_TP(dt,n) - o_nodeGenCost_TP(dt,n);
+
+                        o_nodeBenefit_TP(dt,n) $ (node(currTP,n) and (o_nodeGeneration_TP(dt,n) = 0)) = 0;
+
+                        o_nodeBenefit_TP(dt,n) $ (node(currTP,n) and (o_nodeLoad_TP(dt,n) > 0)) =
+                            (i_tradingPeriodLength/60)*
+                            ((Voll-o_nodePrice_TP(dt,n))*max(0,(o_nodeLoad_TP(dt,n) - o_nodeDeficit_TP(dt,n))));
+
+                       if(includeIRBenefits = 1,
+                           o_nodeBenefit_TP(dt,n) $ Node(currTP,n) = o_nodeBenefit_TP(dt,n) - o_nodeGenIRCost_TP(dt,n) + o_nodeRevenueIR_TP(dt,n);
+                       );
+
+$ontext
+DW
+The next bit is to change the node benefit when energy is bidded. It isn't actually correct - as there are constant terms that are not included here.
+However, the difference in benefits will be correct when comparing 2 steps, as the constants are... constant for both situations
+
+Original nodebenefit calculation:
+
+o_NodeLoad_TP*(VoLL-o_NodePrice_TP)
+
+Reduction in benefit due to reduced load:
+
++(PURCHASEBLOCK.l*(VoLL- o_NodePrice_TP)
+
+Reduction in benefit due to lower 'VoLL' from bidprice:
+
++(PurchaseBidMW-PURCHASEBLOCK.l)*(VoLL-PurchaseBidPrice)
+
+
+(PURCHASEBLOCK.l*(VoLL- o_NodePrice_TP) +(PurchaseBidMW-PURCHASEBLOCK.l)*(VoLL-PurchaseBidPrice).
+
+factorize out =>
+
+-PURCHASEBLOCK.l * o_NodePrice_TP +PurchaseBidMW * VoLL +PURCHASEBLOCK.l * PurchaseBidPrice - PurchaseBidMW * PurchaseBidPrice
+
+Get rid of constants =>
+
+-PURCHASEBLOCK.l * o_NodePrice_TP + PURCHASEBLOCK.l * PurchaseBidPrice
+
+$offtext
+                        o_nodeBenefit_TP(dt,n) $ (node(currTP,n) and (o_nodeLoad_TP(dt,n) > 0)) =
+                            o_nodeBenefit_TP(dt,n) +
+                            (i_tradingPeriodLength/60)*
+                            sum((i_bid,trdBlk) $ (bidNode(currTP,i_bid,n) and validPurchaseBidBlock(currTP,i_bid,trdBlk)),
+                                PURCHASEBLOCK.l(currTP,i_bid,trdBlk)*
+                                [purchaseBidPrice(currTP,i_bid,trdBlk) - o_nodePrice_TP(dt,n)]
+                            );
+* DW - For nodes with -load (embeddeds), the equation is simpler, because assumed SRMC of 0
+
+                        o_nodeBenefit_TP(dt,n) $ (node(currTP,n) and (o_nodeLoad_TP(dt,n) < 0)) =
+                           (i_tradingPeriodLength/60)*o_nodePrice_TP(dt,n)*abs(o_nodeLoad_TP(dt,n));
+
+                        o_nodeDispatchedBid_TP(dt,n) $ (node(currTP,n) and (o_nodeLoad_TP(dt,n) > 0)) =
+                            sum((i_bid,trdBlk) $ (bidNode(currTP,i_bid,n) and validPurchaseBidBlock(currTP,i_bid,trdBlk)),
+                                PURCHASEBLOCK.l(currTP,i_bid,trdBlk)
+                            );
 
 *                       branch output
                         o_branch(dt,br) $ branch(currTP,br) = yes ;
@@ -3351,6 +3513,20 @@ $label Next
                             = MnodeSecurityConstraintLE.m(currTP,MnodeCstr) $ (MnodeConstraintSense(currTP,MnodeCstr) = -1)
                             + MnodeSecurityConstraintGE.m(currTP,MnodeCstr) $ (MnodeConstraintSense(currTP,MnodeCstr) = 1)
                             + MnodeSecurityConstraintEQ.m(currTP,MnodeCstr) $ (MnodeConstraintSense(currTP,MnodeCstr) = 0) ;
+
+* DW - Calculate benefit by generation offer ========================================================================================================================================================================================================================================================================================================================================================
+* Note that this produces benefit accrued to an 'offer' from the i_offer set.
+* This is different from the above calculations that produce benefits for a 'node' from the i_node set.
+* Currently, all offers have a one to one mapping to nodes, so these calculations are redundant.
+* As such, the extra benefit calculations performed above for the nodes are not repeated here.
+
+                        o_offerGenCost_TP(dt,o) $ [ offer(currTP,o) and (o_offerEnergy_TP(dt,o) > 0) ] =
+                           (i_tradingPeriodLength/60) * sum[trdBlk $ validGenerationOfferBlock(currTP,o,trdBlk),
+                               GENERATIONBLOCK.l(currTP,o,trdBlk) * generationOfferPrice(currTP,o,trdBlk)];
+
+                        o_offerBenefit_TP(dt,o) $ [ offer(currTP,o) and (o_offerEnergy_TP(dt,o) > 0) ] =
+                            (i_tradingPeriodLength/60) * o_offerEnergy_TP(dt,o) * sum[n $ offerNode(currTP,o,n), o_nodePrice_TP(dt,n)]
+                            -  o_offerGenCost_TP(dt,o);
 
 *                       Island output
                         o_island(dt,ild) = yes ;
@@ -3921,6 +4097,12 @@ $label Next
         o_offerSIRrevenue(o) = 0 ;
     ) ;
 
+* DW - delete the old EoP file, and export a new one
+    if (%VSPDRunNum% + iterationCount > 2.00,
+        execute 'del %OutputPath%%runName%\EoP_gen.gdx';
+    );
+
+    execute_unload '%OutputPath%%runName%\EoP_gen.gdx', o_EoPgen;
 
 * i) End of the solve vSPD loop
 ] ;
@@ -3990,12 +4172,15 @@ if( (FTRflag = 0),
                        o_branchToBusPrice_TP, o_branchMarginalPrice_TP, o_branchTotalRentals_TP
                        o_branchCapacity_TP ;
 
+* DW add the node benefit and dispatched bid parameters to output files
+
         execute_unload '%outputPath%\%runName%\RunNum%vSPDRunNum%_NodeOutput_TP.gdx'
                        o_node, o_nodeGeneration_TP, o_nodeLoad_TP, o_nodePrice_TP
-                       o_nodeRevenue_TP, o_nodeCost_TP, o_nodeDeficit_TP, o_nodeSurplus_TP ;
+                       o_nodeRevenue_TP, o_nodeCost_TP, o_nodeDeficit_TP, o_nodeSurplus_TP,
+                       o_nodeBenefit_TP, o_nodeDispatchedBid_TP ;
 
         execute_unload '%outputPath%\%runName%\RunNum%vSPDRunNum%_OfferOutput_TP.gdx'
-                       o_offer, o_offerEnergy_TP, o_offerFIR_TP, o_offerSIR_TP ;
+                       o_offer, o_offerEnergy_TP, o_offerFIR_TP, o_offerSIR_TP, o_offerBenefit_TP ;
 
         execute_unload '%outputPath%\%runName%\RunNum%vSPDRunNum%_ReserveOutput_TP.gdx'
                        o_island, o_FIRreqd_TP, o_SIRreqd_TP, o_FIRprice_TP, o_SIRprice_TP

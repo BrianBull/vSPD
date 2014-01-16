@@ -135,6 +135,12 @@ Parameters
   o_nodeCost_TP(*,*)                 'Cost per node per time period for each input data set ($)'
   o_nodeDeficit_TP(*,*)              'Node deficit generation (MW)'
   o_nodeSurplus_TP(*,*)              'Node surplus generation (MW)'
+
+* DW extra reporting parameters for TPM
+
+o_nodeBenefit_TP(*,*)          'Node benefit calculated for TPM'
+o_nodeDispatchedBid_TP(*,*)    'Total amount of load not met due to bid'
+
   o_offerEnergy_TP(*,*)              'Energy per offer per time period for each input data set (MW)'
   o_offerFIR_TP(*,*)                 'FI reserves per offer per time period for each input data set (MW)'
   o_offerSIR_TP(*,*)                 'SI reserves per offer per time period for each input data set (MW)'
@@ -257,7 +263,9 @@ if(tradePeriodReports = 1,
 
     execute_load "%outputPath%\%runName%\runNum%vSPDrunNum%_NodeOutput_TP.gdx"
                  o_nodeGeneration_TP, o_nodeLoad_TP, o_nodePrice_TP, o_nodeRevenue_TP
-                 o_nodeCost_TP, o_nodeDeficit_TP, o_nodeSurplus_TP
+                 o_nodeCost_TP, o_nodeDeficit_TP, o_nodeSurplus_TP,
+* DW extra parameters for TPM reporting
+                 o_NodeBenefit_TP, o_NodeDispatchedBid_TP
 
     execute_load "%outputPath%\%runName%\runNum%vSPDrunNum%_OfferOutput_TP.gdx"
                  o_offerEnergy_TP, o_offerFIR_TP, o_offerSIR_TP
@@ -453,7 +461,9 @@ if( (opMode <> 1) and (opMode <> -1 ),
         loop( (dim2,dim3) $ { o_DateTime(dim2) and o_node(dim2,dim3) },
             put dim2.tl, dim3.tl, o_nodeGeneration_TP(dim2,dim3), o_nodeLoad_TP(dim2,dim3)
                 o_nodePrice_TP(dim2,dim3), o_nodeRevenue_TP(dim2,dim3), o_nodeCost_TP(dim2,dim3)
-                o_nodeDeficit_TP(dim2,dim3), o_nodeSurplus_TP(dim2,dim3) / ;
+                o_nodeDeficit_TP(dim2,dim3), o_nodeSurplus_TP(dim2,dim3),
+* DW extra parameters for TPM reports
+                o_NodeBenefit_TP(dim2,dim3), o_NodeDispatchedBid_TP(dim2,dim3)  / ;
         ) ;
 *       Trading period offer result
         OfferResults_TP.pc = 5 ;
